@@ -1,4 +1,5 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
 import { findDuplicateId, readRequiredId } from '../../validation/documentIds';
 
@@ -8,47 +9,50 @@ const parse = (xml: string) =>
 describe('findDuplicateId', () => {
   it('passes a document whose IDs are unique', () => {
     const doc = parse('<r ID="_a"><c ID="_b"/><c ID="_c"/></r>');
-    expect(findDuplicateId(doc)).toBeNull();
+    assert.equal(findDuplicateId(doc), null);
   });
 
   it('names the value that appears twice', () => {
     const doc = parse('<r ID="_a"><c ID="_dup"/><c ID="_dup"/></r>');
-    expect(findDuplicateId(doc)).toBe('_dup');
+    assert.equal(findDuplicateId(doc), '_dup');
   });
 
   // The wrapping shape: the duplicate is between the root and a nested
   // element, not between siblings.
   it('finds a duplicate shared between an ancestor and a descendant', () => {
     const doc = parse('<r ID="_same"><c ID="_same"/></r>');
-    expect(findDuplicateId(doc)).toBe('_same');
+    assert.equal(findDuplicateId(doc), '_same');
   });
 
   it('ignores elements with no ID at all', () => {
     const doc = parse('<r ID="_a"><c/><c/></r>');
-    expect(findDuplicateId(doc)).toBeNull();
+    assert.equal(findDuplicateId(doc), null);
   });
 });
 
 describe('readRequiredId', () => {
   it('returns the ID', () => {
     const doc = parse('<a ID="_x"/>');
-    expect(readRequiredId(doc.documentElement as unknown as Element)).toBe(
+    assert.equal(
+      readRequiredId(doc.documentElement as unknown as Element),
       '_x',
     );
   });
 
   it('returns null when the attribute is absent', () => {
     const doc = parse('<a/>');
-    expect(
+    assert.equal(
       readRequiredId(doc.documentElement as unknown as Element),
-    ).toBeNull();
+      null,
+    );
   });
 
   it('returns null when the attribute is empty', () => {
     const doc = parse('<a ID=""/>');
-    expect(
+    assert.equal(
       readRequiredId(doc.documentElement as unknown as Element),
-    ).toBeNull();
+      null,
+    );
   });
 
   // The absent case exercised directly, not only through @xmldom/xmldom 0.9
@@ -56,11 +60,11 @@ describe('readRequiredId', () => {
   // '' for an absent attribute; both must read as "no ID".
   it('returns null for an absent attribute reported as null', () => {
     const element = { getAttribute: () => null } as unknown as Element;
-    expect(readRequiredId(element)).toBeNull();
+    assert.equal(readRequiredId(element), null);
   });
 
   it("returns null for an absent attribute reported as ''", () => {
     const element = { getAttribute: () => '' } as unknown as Element;
-    expect(readRequiredId(element)).toBeNull();
+    assert.equal(readRequiredId(element), null);
   });
 });

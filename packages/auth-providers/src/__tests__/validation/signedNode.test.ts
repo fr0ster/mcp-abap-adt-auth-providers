@@ -1,4 +1,5 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import {
   generateKeyMaterial,
   type KeyMaterial,
@@ -7,6 +8,12 @@ import {
 import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
 import { SignedXml } from 'xml-crypto';
 import { resolveSignedElements, toPem } from '../../validation/signedNode';
+import {
+  cases,
+  caseTitle,
+  contains,
+  notContains,
+} from '../helpers/expectations';
 import { configurationOf, thrownFrom } from '../helpers/minted';
 import { expectSamlRefusal, thrownBy } from '../helpers/samlRefusal';
 
@@ -84,7 +91,7 @@ describe('resolveSignedElements', () => {
     const [element] = resolveSignedElements(wrapped, parse(wrapped), [
       key.certificatePem,
     ]);
-    expect(element!.localName).toBe('Assertion');
+    assert.equal(element!.localName, 'Assertion');
   });
 
   // The documented contract is PEM or base64 DER, and metadata carries the
@@ -104,7 +111,7 @@ describe('resolveSignedElements', () => {
     const [element] = resolveSignedElements(wrapped, parse(wrapped), [
       toPem(der),
     ]);
-    expect(element!.localName).toBe('Assertion');
+    assert.equal(element!.localName, 'Assertion');
 
     // Passed raw, without the caller's normalisation, the same bytes are
     // rejected — pinning that the conversion is real work, not a no-op.
@@ -124,10 +131,10 @@ describe('resolveSignedElements', () => {
       .replace(/\s+/g, '');
     const broken = `${der.slice(0, 10)} \t${der.slice(10, 70)}\r\n${der.slice(70)}\u00a0`;
     const pem = toPem(broken);
-    expect(pem.startsWith('-----BEGIN CERTIFICATE-----\n')).toBe(true);
+    assert.equal(pem.startsWith('-----BEGIN CERTIFICATE-----\n'), true);
     const lines = pem.trim().split('\n').slice(1, -1);
-    expect(lines.join('')).toBe(der);
-    for (const line of lines.slice(0, -1)) expect(line).toHaveLength(64);
+    assert.equal(lines.join(''), der);
+    for (const line of lines.slice(0, -1)) assert.equal(line.length, 64);
   });
 
   // Each is the configuration case idp-certificate-invalid —
@@ -139,24 +146,33 @@ describe('resolveSignedElements', () => {
       'a configured IdP certificate is not a valid X.509 certificate in PEM or base64 DER',
   };
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['three padding characters', 'AAAA==='],
     ['only padding', '=='],
     ['a character outside the alphabet', 'AA-A'],
     ['padding inside', 'AA=AAAAA'],
-  ])(
-    'refuses base64 with %s as neither PEM nor base64',
-    async (_name, value) => {
-      expect(configurationOf(await thrownFrom(() => toPem(value)))).toEqual(
-        E26,
-      );
-    },
-  );
+  ]).entries()) {
+    const [_name, value] = caseRow;
+    it(
+      caseTitle(
+        'refuses base64 with %s as neither PEM nor base64',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        assert.deepEqual(
+          configurationOf(await thrownFrom(() => toPem(value))),
+          E26,
+        );
+      },
+    );
+  }
 
   it('refuses a certificate that is neither PEM nor base64', async () => {
-    expect(
+    assert.deepEqual(
       configurationOf(await thrownFrom(() => toPem('not a certificate!'))),
-    ).toEqual(E26);
+      E26,
+    );
   });
 
   // Base64 syntax is not enough: this armours cleanly, and only OpenSSL knows
@@ -164,16 +180,19 @@ describe('resolveSignedElements', () => {
   // verification and be reported as a bad signature — the configuration
   // blamed on the assertion again.
   it('refuses base64 that is not a certificate', async () => {
-    expect(configurationOf(await thrownFrom(() => toPem('AAAA')))).toEqual(E26);
+    assert.deepEqual(
+      configurationOf(await thrownFrom(() => toPem('AAAA'))),
+      E26,
+    );
   });
 
   it("says so in fixed words; nothing of OpenSSL's text, no cause", async () => {
     const thrown = (await thrownFrom(() => toPem('AAAA'))) as Error & {
       cause?: unknown;
     };
-    expect(String(thrown)).not.toMatch(/asn1|routines/i);
-    expect(JSON.stringify(thrown)).not.toMatch(/asn1|routines/i);
-    expect(thrown.cause).toBeUndefined();
+    assert.doesNotMatch(String(thrown), /asn1|routines/i);
+    assert.doesNotMatch(JSON.stringify(thrown), /asn1|routines/i);
+    assert.equal(thrown.cause, undefined);
   });
 
   it('accepts a certificate later in the rotation list', () => {
@@ -185,7 +204,7 @@ describe('resolveSignedElements', () => {
       other.certificatePem,
       key.certificatePem,
     ]);
-    expect(element!.localName).toBe('Assertion');
+    assert.equal(element!.localName, 'Assertion');
   });
 
   it('refuses a document with no signature', () => {
@@ -243,7 +262,7 @@ describe('resolveSignedElements', () => {
     });
     const wrapped = RESPONSE(sig.getSignedXml());
     // The premise: the attacker's certificate really is in KeyInfo.
-    expect(wrapped).toContain(`<X509Certificate>${attackerBody}`);
+    contains(wrapped, `<X509Certificate>${attackerBody}`);
 
     expectSamlRefusal(
       thrownBy(() =>
@@ -333,7 +352,7 @@ describe('resolveSignedElements', () => {
     // The fixture must be what it claims before it can prove anything: a setup
     // that silently produced a different document would pass or fail for a
     // reason nobody chose.
-    expect(wrapped).toContain('URI=""');
+    contains(wrapped, 'URI=""');
 
     // And it must verify, or this tests the signature check rather than the
     // enveloping one. Measured against the installed xml-crypto: an empty-URI
@@ -348,7 +367,7 @@ describe('resolveSignedElements', () => {
         'Signature',
       )[0] as never,
     );
-    expect(probe.checkSignature(wrapped)).toBe(true);
+    assert.equal(probe.checkSignature(wrapped), true);
 
     expectSamlRefusal(
       thrownBy(() =>
@@ -394,7 +413,7 @@ describe('resolveSignedElements', () => {
         'Signature',
       )[0] as never,
     );
-    expect(probe.checkSignature(wrapped)).toBe(true);
+    assert.equal(probe.checkSignature(wrapped), true);
 
     const error = expectSamlRefusal(
       thrownBy(() =>
@@ -403,7 +422,8 @@ describe('resolveSignedElements', () => {
       'several-references',
       { facts: { count: 2 } },
     );
-    expect(error.reason).toContain(
+    contains(
+      error.reason,
       'the signature carries 2 ds:Reference; exactly one is allowed',
     );
   });
@@ -421,8 +441,8 @@ describe('resolveSignedElements', () => {
       while (reference.firstChild) moved.appendChild(reference.firstChild);
       reference.parentNode?.replaceChild(moved, reference);
     });
-    expect(wrapped).toContain('<x:Reference');
-    expect(xmlCryptoVerifies(wrapped, key)).toBe(true);
+    contains(wrapped, '<x:Reference');
+    assert.equal(xmlCryptoVerifies(wrapped, key), true);
 
     expectSamlRefusal(
       thrownBy(() =>
@@ -445,12 +465,13 @@ describe('resolveSignedElements', () => {
       resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
     );
     const error = expectSamlRefusal(thrown, 'signature-malformed');
-    expect(error.reason).toBe(
+    assert.equal(
+      error.reason,
       'the SAML assertion was refused (signature): the signature element is malformed',
     );
     for (const rendering of [JSON.stringify(thrown), String(thrown)]) {
-      expect(rendering).not.toContain('DigestMethod');
-      expect(rendering).not.toContain('Transforms');
+      notContains(rendering, 'DigestMethod');
+      notContains(rendering, 'Transforms');
     }
   });
 
@@ -461,8 +482,8 @@ describe('resolveSignedElements', () => {
     const wrapped = signWithPatchedReference(key, (reference) => {
       reference.setAttribute('URI', '_a1');
     });
-    expect(wrapped).toContain('URI="_a1"');
-    expect(xmlCryptoVerifies(wrapped, key)).toBe(true);
+    contains(wrapped, 'URI="_a1"');
+    assert.equal(xmlCryptoVerifies(wrapped, key), true);
 
     const error = expectSamlRefusal(
       thrownBy(() =>
@@ -472,7 +493,7 @@ describe('resolveSignedElements', () => {
       { diagnostics: { referenceUri: '_a1' } },
     );
     // The value is the diagnostic's alone, never the words.
-    expect(error.reason).not.toContain('_a1');
+    notContains(error.reason, '_a1');
   });
 
   // xml-crypto resolves a reference by Id, ID or id; this module only by
@@ -482,8 +503,8 @@ describe('resolveSignedElements', () => {
     const key = generateKeyMaterial();
     const withIdAttribute = ASSERTION().replace(' ID="_a1"', ' Id="_a1"');
     const wrapped = RESPONSE(signXml(withIdAttribute, key));
-    expect(wrapped).toContain('URI="#_a1"');
-    expect(xmlCryptoVerifies(wrapped, key)).toBe(true);
+    contains(wrapped, 'URI="#_a1"');
+    assert.equal(xmlCryptoVerifies(wrapped, key), true);
 
     const error = expectSamlRefusal(
       thrownBy(() =>
@@ -492,7 +513,7 @@ describe('resolveSignedElements', () => {
       'reference-not-found',
       { diagnostics: { referenceUri: '#_a1' } },
     );
-    expect(error.reason).not.toContain('_a1');
+    notContains(error.reason, '_a1');
   });
 
   // Whatever loadSignature throws — not even an Error — is the same rule,
@@ -501,19 +522,17 @@ describe('resolveSignedElements', () => {
     const key = generateKeyMaterial();
     const signed = signXml(ASSERTION(), key);
     const wrapped = RESPONSE(signed);
-    const spy = jest
-      .spyOn(SignedXml.prototype, 'loadSignature')
-      .mockImplementation(() => {
-        throw 'not an Error object';
-      });
+    const spy = mock.method(SignedXml.prototype, 'loadSignature', () => {
+      throw 'not an Error object';
+    });
     try {
       const thrown = thrownBy(() =>
         resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
       );
       expectSamlRefusal(thrown, 'signature-malformed');
-      expect(JSON.stringify(thrown)).not.toContain('not an Error object');
+      notContains(JSON.stringify(thrown), 'not an Error object');
     } finally {
-      spy.mockRestore();
+      spy.mock.restore();
     }
   });
 
@@ -525,7 +544,7 @@ describe('resolveSignedElements', () => {
     const [element] = resolveSignedElements(wrapped, parse(wrapped), [
       key.certificatePem,
     ]);
-    expect(element!.getAttribute('ID')).toBe('_real');
+    assert.equal(element!.getAttribute('ID'), '_real');
   });
 
   // Identity providers often sign both levels — Keycloak does by default. The
@@ -550,7 +569,7 @@ describe('resolveSignedElements', () => {
     const covered = resolveSignedElements(xml, parse(xml), [
       key.certificatePem,
     ]);
-    expect(covered.map((e) => e.localName).sort()).toEqual([
+    assert.deepEqual(covered.map((e) => e.localName).sort(), [
       'Assertion',
       'Response',
     ]);

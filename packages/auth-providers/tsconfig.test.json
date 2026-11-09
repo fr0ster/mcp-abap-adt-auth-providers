@@ -107,6 +107,13 @@
     "src/__tests__/strategies/manualPasscodeStrategy.test.ts",
     "src/__tests__/strategies/manualStrategies.test.ts",
     "src/__tests__/strategies/manualStrategiesAbort.test.ts",
-    "src/__tests__/strategies/namedCompositions.test.ts"
+    "src/__tests__/strategies/namedCompositions.test.ts",
+    "src/__tests__/validation/assertionValidator.test.ts",
+    "src/__tests__/validation/documentIds.test.ts",
+    "src/__tests__/validation/inMemoryReplayStore.test.ts",
+    "src/__tests__/validation/samlRules.test.ts",
+    "src/__tests__/validation/samlSources.test.ts",
+    "src/__tests__/validation/signedNode.test.ts",
+    "src/__tests__/validation/xsdDateTime.test.ts"
   ]
 }

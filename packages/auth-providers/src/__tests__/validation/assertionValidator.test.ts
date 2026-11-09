@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { afterEach, describe, it, mock } from 'node:test';
 import { generateKeyMaterial, signXml } from '@mcp-abap-adt/auth-mocks';
 import { DOMParser, type Document } from '@xmldom/xmldom';
 import {
@@ -8,6 +9,13 @@ import {
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
 import * as signedNode from '../../validation/signedNode';
 import { resolveSignedElements, toPem } from '../../validation/signedNode';
+import {
+  cases,
+  caseTitle,
+  contains,
+  notContains,
+  thrown,
+} from '../helpers/expectations';
 import { expectSamlRejection } from '../helpers/samlRefusal';
 
 const KEY = generateKeyMaterial();
@@ -212,37 +220,44 @@ const refusalFor = (confirmations: string[], ctx = context) =>
 
 describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   it('refuses a malformed certificate at construction, not at login', () => {
-    expect(() =>
-      createSignedResponseValidator({
-        idpCertificates: ['AAAA'],
-        replayStore: createInMemoryReplayStore(),
-      }),
-    ).toThrow(/not a valid X.509 certificate/i);
+    assert.throws(
+      () =>
+        createSignedResponseValidator({
+          idpCertificates: ['AAAA'],
+          replayStore: createInMemoryReplayStore(),
+        }),
+      thrown(/not a valid X.509 certificate/i),
+    );
   });
 
   // A bad entry must not hide a good one: normalising the whole list up front
   // is what stops the rotation loop aborting on its first element.
   it('refuses a list whose first entry is malformed, whatever follows', () => {
-    expect(() =>
-      createSignedResponseValidator({
-        idpCertificates: ['AAAA', KEY.certificatePem],
-        replayStore: createInMemoryReplayStore(),
-      }),
-    ).toThrow(/not a valid X.509 certificate/i);
+    assert.throws(
+      () =>
+        createSignedResponseValidator({
+          idpCertificates: ['AAAA', KEY.certificatePem],
+          replayStore: createInMemoryReplayStore(),
+        }),
+      thrown(/not a valid X.509 certificate/i),
+    );
   });
 
   it('accepts a well-formed assertion and reports what the flow needs', async () => {
     const result = await validator().validate(encode(buildResponse()), context);
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
     // signedXml is the element this validator required — the Response, which
     // carries Status. Without this the assertion-only case below is the only
     // one pinning signedXml, and an implementation that always returned the
     // Assertion would satisfy the suite.
-    expect(result.signedXml).toContain('samlp:Response');
-    expect(result.signedXml).toContain('samlp:Status');
-    expect(result.issuer).toBe(ISSUER);
-    expect(result.nameId).toBe('mock-user');
-    expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    contains(result.signedXml, 'samlp:Response');
+    contains(result.signedXml, 'samlp:Status');
+    assert.equal(result.issuer, ISSUER);
+    assert.equal(result.nameId, 'mock-user');
+    assert.ok(
+      result.expiresAt.getTime() > Date.now(),
+      `${result.expiresAt.getTime()} > ${Date.now()}`,
+    );
   });
 
   it('accepts an assertion-signed document through the other validator', async () => {
@@ -250,7 +265,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       encode(buildResponse({ signWhat: 'assertion' })),
       context,
     );
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   // Each validator refuses the placement it was not built for. This is the
@@ -289,7 +304,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
       context,
     );
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   it('the assertion-only validator accepts a wrong Destination', async () => {
@@ -302,7 +317,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
       context,
     );
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   it('the assertion-only validator accepts a missing Destination', async () => {
@@ -310,7 +325,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       encode(buildResponse({ signWhat: 'assertion', destination: null })),
       context,
     );
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   // signedXml is the signed element, not the response — the difference
@@ -320,9 +335,10 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       encode(buildResponse({ signWhat: 'assertion' })),
       context,
     );
-    expect(result.signedXml).toContain('Assertion');
-    expect(result.signedXml).not.toContain('samlp:Status');
-    expect(Buffer.from(result.raw, 'base64').toString('utf8')).toContain(
+    contains(result.signedXml, 'Assertion');
+    notContains(result.signedXml, 'samlp:Status');
+    contains(
+      Buffer.from(result.raw, 'base64').toString('utf8'),
       'samlp:Status',
     );
   });
@@ -416,7 +432,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         action: 'prepend',
       },
     });
-    expect(signed.match(/<saml:Conditions/g)).toHaveLength(2);
+    assert.equal(signed.match(/<saml:Conditions/g)?.length, 2);
     await expectSamlRejection(
       validator().validate(encode(signed), context),
       'several-conditions',
@@ -431,7 +447,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/, ''),
     );
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'no-direct-assertion',
@@ -447,7 +463,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         `${assertion}${assertion.replace('ID="_a1"', 'ID="_a2"')}`,
       );
     });
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'several-direct-assertions',
@@ -468,7 +484,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         '<samlp:Status>',
         `<samlp:Extensions>${assertion}</samlp:Extensions><samlp:Status>`,
       );
-    expect(signedElementsOf(xml)[0]!.getAttribute('ID')).toBe('_a1');
+    assert.equal(signedElementsOf(xml)[0]!.getAttribute('ID'), '_a1');
     await expectSamlRejection(
       assertionValidator().validate(encode(xml), context),
       'no-direct-assertion',
@@ -487,7 +503,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       (u) => u.replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/, ''),
       { status: RESPONDER },
     );
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'declined',
@@ -530,27 +546,35 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   // Status is read only once the Response is known to be the signed
   // element: an unsigned Response's Status is an attacker's and decides
   // nothing — not the rule, not a fact, not a diagnostic (review, fix 1).
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['a registered', RESPONDER],
     ['an unregistered', 'urn:example:status:Forged'],
-  ])(
-    'refuses an unsigned Response with %s non-Success Status around a signed Assertion as response-not-signed',
-    async (_kind, status) => {
-      const xml = buildResponse({ signWhat: 'assertion', status });
-      expect(signedElementsOf(xml).map((e) => e.localName)).toEqual([
-        'Assertion',
-      ]);
-      const error = await expectSamlRejection(
-        validator().validate(encode(xml), context),
-        'response-not-signed',
-      );
-      expect(error.facts).toEqual({
-        rule: 'response-not-signed',
-        check: 'signedNode',
-      });
-      expect(JSON.stringify(error)).not.toContain(status);
-    },
-  );
+  ]).entries()) {
+    const [_kind, status] = caseRow;
+    it(
+      caseTitle(
+        'refuses an unsigned Response with %s non-Success Status around a signed Assertion as response-not-signed',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const xml = buildResponse({ signWhat: 'assertion', status });
+        assert.deepEqual(
+          signedElementsOf(xml).map((e) => e.localName),
+          ['Assertion'],
+        );
+        const error = await expectSamlRejection(
+          validator().validate(encode(xml), context),
+          'response-not-signed',
+        );
+        assert.deepEqual(error.facts, {
+          rule: 'response-not-signed',
+          check: 'signedNode',
+        });
+        notContains(JSON.stringify(error), status);
+      },
+    );
+  }
 
   it('the assertion-only validator keeps its order: no direct Assertion is no-direct-assertion, whatever the Status', async () => {
     const original = buildResponse({
@@ -565,7 +589,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         '<samlp:Status>',
         `<samlp:Extensions>${assertion}</samlp:Extensions><samlp:Status>`,
       );
-    expect(signedElementsOf(xml)[0]!.getAttribute('ID')).toBe('_a1');
+    assert.equal(signedElementsOf(xml)[0]!.getAttribute('ID'), '_a1');
     await expectSamlRejection(
       assertionValidator().validate(encode(xml), context),
       'no-direct-assertion',
@@ -576,7 +600,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/<samlp:Status>[\s\S]*?<\/samlp:Status>/, ''),
     );
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'no-status',
@@ -591,7 +615,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
           'Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>',
       ),
     );
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'several-status',
@@ -603,7 +627,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/<samlp:StatusCode [^>]*\/>/, ''),
     );
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'no-status-code',
@@ -614,7 +638,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/(<samlp:StatusCode [^>]*\/>)/, '$1$1'),
     );
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'several-status-codes',
@@ -626,7 +650,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/<samlp:StatusCode [^>]*\/>/, '<samlp:StatusCode/>'),
     );
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'status-code-no-value',
@@ -642,7 +666,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         '</saml:Issuer><saml:Issuer>urn:someone:else</saml:Issuer>',
       ),
     );
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'several-issuers',
@@ -670,9 +694,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       u.replace('<saml:NameID>mock-user</saml:NameID>', ''),
     );
     const result = await validator().validate(encode(xml), context);
-    expect(result.nameId).toBeUndefined();
+    assert.equal(result.nameId, undefined);
     // Present as a key, as in 5.4.0: a consumer may merge the result.
-    expect(Object.hasOwn(result, 'nameId')).toBe(true);
+    assert.equal(Object.hasOwn(result, 'nameId'), true);
   });
 
   it('reports no nameId when the Subject carries two', async () => {
@@ -683,7 +707,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
     );
     const result = await validator().validate(encode(xml), context);
-    expect(result.nameId).toBeUndefined();
+    assert.equal(result.nameId, undefined);
   });
 
   it('refuses an assertion with no NotOnOrAfter', async () => {
@@ -737,7 +761,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       encode(buildResponse({ notOnOrAfter: iso(-1000) })),
       context,
     );
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   it('refuses an assertion that is not yet valid', async () => {
@@ -772,7 +796,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       encode(buildResponse({ audiences: [['urn:someone:else', AUDIENCE]] })),
       context,
     );
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   // AND across restrictions: one permitting and one excluding must be refused.
@@ -814,7 +838,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       encode(buildResponse({ confirmations: [unsolicitedConfirmation] })),
       unsolicitedContext,
     );
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   it('refuses an InResponseTo when no request ID is expected', async () => {
@@ -849,12 +873,14 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         action: 'prepend',
       },
     });
-    expect(
+    assert.equal(
       (await validator().validate(encode(both), context)).assertionId,
-    ).toBe('_a1');
-    expect(
+      '_a1',
+    );
+    assert.equal(
       (await assertionValidator().validate(encode(both), context)).assertionId,
-    ).toBe('_a1');
+      '_a1',
+    );
   });
 
   // The saml2-bearer grant exchanges an Assertion; 3.0.0 accepts one bare.
@@ -868,7 +894,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       Buffer.from(bareAssertion()).toString('base64url'),
       context,
     );
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   it('the signed-Response validator refuses a bare Assertion', async () => {
@@ -1025,7 +1051,10 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
       context,
     );
-    expect(result.expiresAt.getTime()).toBeLessThan(Date.now() + 300_000);
+    assert.ok(
+      result.expiresAt.getTime() < Date.now() + 300_000,
+      `${result.expiresAt.getTime()} < ${Date.now() + 300_000}`,
+    );
   });
 
   // The wrapping shape at the validator level: one genuinely signed assertion,
@@ -1057,9 +1086,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ) as unknown as Document,
       [toPem(KEY.certificatePem)],
     );
-    expect(covered).toHaveLength(1);
-    expect(covered[0]!.localName).toBe('Assertion');
-    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
+    assert.equal(covered.length, 1);
+    assert.equal(covered[0]!.localName, 'Assertion');
+    assert.equal(covered[0]!.getAttribute('ID'), '_a1');
 
     await expectSamlRejection(
       assertionValidator().validate(encode(doctored), context),
@@ -1093,14 +1122,15 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   it('refuses a bare forged Assertion carrying the signed one in its Advice', async () => {
     const attack = forgedWrapping();
     const covered = signedElementsOf(attack);
-    expect(covered).toHaveLength(1);
-    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
-    expect(
+    assert.equal(covered.length, 1);
+    assert.equal(covered[0]!.getAttribute('ID'), '_a1');
+    assert.equal(
       (
         new DOMParser().parseFromString(attack, 'text/xml')
           .documentElement as unknown as { getAttribute(n: string): string }
       ).getAttribute('ID'),
-    ).toBe('_forged');
+      '_forged',
+    );
 
     await expectSamlRejection(
       assertionValidator().validate(encode(attack), context),
@@ -1115,8 +1145,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       `<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>` +
       `${forgedWrapping()}</samlp:Response>`;
     const covered = signedElementsOf(attack);
-    expect(covered).toHaveLength(1);
-    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
+    assert.equal(covered.length, 1);
+    assert.equal(covered[0]!.getAttribute('ID'), '_a1');
 
     await expectSamlRejection(
       assertionValidator().validate(encode(attack), context),
@@ -1143,9 +1173,10 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1" Destination="${ACS}">` +
       `<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>` +
       `${outer}</samlp:Response>`;
-    expect(signedElementsOf(attack).map((e) => e.getAttribute('ID'))).toEqual([
-      '_inner',
-    ]);
+    assert.deepEqual(
+      signedElementsOf(attack).map((e) => e.getAttribute('ID')),
+      ['_inner'],
+    );
 
     await expectSamlRejection(
       assertionValidator().validate(encode(attack), context),
@@ -1167,11 +1198,12 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       `<samlp:Extensions>${genuine}</samlp:Extensions>` +
       `<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>` +
       `${forged}</samlp:Response>`;
-    expect(
+    assert.deepEqual(
       signedElementsOf(attack).map(
         (e) => `${e.localName}:${e.getAttribute('ID')}`,
       ),
-    ).toEqual(['Response:_r1']);
+      ['Response:_r1'],
+    );
 
     await expectSamlRejection(
       validator().validate(encode(attack), context),
@@ -1191,8 +1223,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         `<samlp:Status>`,
     );
     const covered = signedElementsOf(doctored);
-    expect(covered).toHaveLength(1);
-    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
+    assert.equal(covered.length, 1);
+    assert.equal(covered[0]!.getAttribute('ID'), '_a1');
 
     await expectSamlRejection(
       assertionValidator().validate(encode(doctored), context),
@@ -1208,8 +1240,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         `</samlp:Response>`,
     );
     const covered = signedElementsOf(doctored);
-    expect(covered).toHaveLength(1);
-    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
+    assert.equal(covered.length, 1);
+    assert.equal(covered[0]!.getAttribute('ID'), '_a1');
 
     await expectSamlRejection(
       assertionValidator().validate(encode(doctored), context),
@@ -1229,8 +1261,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         '<samlp:Status>',
     );
     const covered = signedElementsOf(doctored);
-    expect(covered).toHaveLength(1);
-    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
+    assert.equal(covered.length, 1);
+    assert.equal(covered[0]!.getAttribute('ID'), '_a1');
 
     await expectSamlRejection(
       assertionValidator().validate(encode(doctored), context),
@@ -1272,58 +1304,78 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       '<s1:Assertion xmlns:s1="urn:oasis:names:tc:SAML:1.0:assertion" AssertionID="_hidden1"/>',
   } as const;
 
-  it.each(Object.entries(HIDDEN))(
-    "refuses %s inside the signed assertion's own ds:Signature",
-    async (_label, hidden) => {
-      const xml = intoFirstSignature(
-        buildResponse({ signWhat: 'assertion' }),
-        hidden,
-      );
-      // Premise: the signature still verifies and covers the assertion, so
-      // only the stray rule can refuse this document.
-      expect(signedElementsOf(xml).map((e) => e.localName)).toEqual([
-        'Assertion',
-      ]);
-      await expectSamlRejection(
-        assertionValidator().validate(encode(xml), context),
-        'assertion-inside-signature',
-      );
-    },
-  );
+  for (const [caseIndex, caseRow] of Object.entries(HIDDEN).entries()) {
+    const [_label, hidden] = caseRow;
+    it(
+      caseTitle(
+        "refuses %s inside the signed assertion's own ds:Signature",
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const xml = intoFirstSignature(
+          buildResponse({ signWhat: 'assertion' }),
+          hidden,
+        );
+        // Premise: the signature still verifies and covers the assertion, so
+        // only the stray rule can refuse this document.
+        assert.deepEqual(
+          signedElementsOf(xml).map((e) => e.localName),
+          ['Assertion'],
+        );
+        await expectSamlRejection(
+          assertionValidator().validate(encode(xml), context),
+          'assertion-inside-signature',
+        );
+      },
+    );
+  }
 
   // Only the xmldsig namespace makes an element a signature. An element that
   // merely has the local name Signature, in any other namespace, is ordinary
   // content: an Advice assertion inside it is inside the signed assertion and
   // is accepted.
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['a private namespace', 'urn:x'],
     ['xmldsig 1.1', 'http://www.w3.org/2009/xmldsig11#'],
-  ])(
-    'accepts an Advice assertion inside a Signature element from %s',
-    async (_label, ns) => {
-      const xml = alteredResponse((u) =>
-        u.replace(
-          '</saml:Conditions>',
-          `</saml:Conditions><saml:Advice><x:Signature xmlns:x="${ns}">` +
-            '<saml:Assertion ID="_advice"><saml:Issuer>x</saml:Issuer></saml:Assertion>' +
-            '</x:Signature></saml:Advice>',
-        ),
-      );
-      expect(signedElementsOf(xml).map((e) => e.localName)).toEqual([
-        'Response',
-      ]);
-      await expect(
-        validator().validate(encode(xml), context),
-      ).resolves.toBeDefined();
-    },
-  );
+  ]).entries()) {
+    const [_label, ns] = caseRow;
+    it(
+      caseTitle(
+        'accepts an Advice assertion inside a Signature element from %s',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const xml = alteredResponse((u) =>
+          u.replace(
+            '</saml:Conditions>',
+            `</saml:Conditions><saml:Advice><x:Signature xmlns:x="${ns}">` +
+              '<saml:Assertion ID="_advice"><saml:Issuer>x</saml:Issuer></saml:Assertion>' +
+              '</x:Signature></saml:Advice>',
+          ),
+        );
+        assert.deepEqual(
+          signedElementsOf(xml).map((e) => e.localName),
+          ['Response'],
+        );
+        assert.notEqual(
+          await validator().validate(encode(xml), context),
+          undefined,
+        );
+      },
+    );
+  }
 
   it("refuses an Assertion inside the signed Response's own ds:Signature", async () => {
     const xml = intoFirstSignature(
       buildResponse({ signWhat: 'response' }),
       HIDDEN['a SAML 2.0 Assertion'],
     );
-    expect(signedElementsOf(xml).map((e) => e.localName)).toEqual(['Response']);
+    assert.deepEqual(
+      signedElementsOf(xml).map((e) => e.localName),
+      ['Response'],
+    );
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'assertion-inside-signature',
@@ -1348,8 +1400,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       },
     });
     const covered = signedElementsOf(signed);
-    expect(covered).toHaveLength(1);
-    expect(covered[0]!.localName).toBe('Response');
+    assert.equal(covered.length, 1);
+    assert.equal(covered[0]!.localName, 'Response');
 
     await expectSamlRejection(
       validator().validate(encode(signed), context),
@@ -1360,8 +1412,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   it('refuses an empty Response Issuer', async () => {
     const signed = buildResponse({ responseIssuer: '' });
     // signXml serialises the empty element self-closed.
-    expect(signed).toContain('<saml:Issuer/>');
-    expect(signedElementsOf(signed)[0]!.localName).toBe('Response');
+    contains(signed, '<saml:Issuer/>');
+    assert.equal(signedElementsOf(signed)[0]!.localName, 'Response');
 
     await expectSamlRejection(
       validator().validate(encode(signed), context),
@@ -1434,7 +1486,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
       context,
     );
-    expect(result.expiresAt.toISOString()).toBe(early);
+    assert.equal(result.expiresAt.toISOString(), early);
   });
 
   // Check 10. Subject first: exactly once, and holding a confirmation.
@@ -1442,7 +1494,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/<saml:Subject>[\s\S]*?<\/saml:Subject>/, ''),
     );
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'no-subject',
@@ -1456,7 +1508,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         '</saml:Subject><saml:Subject><saml:NameID>other</saml:NameID></saml:Subject>',
       ),
     );
-    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(xml)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(xml), context),
       'several-subjects',
@@ -1543,7 +1595,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
       context,
     );
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   it('names at most five candidates, then how many more', async () => {
@@ -1568,7 +1620,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       },
     );
     // The words list five and count the rest, as 5.4.2's did.
-    expect(error.reason).toBe(
+    assert.equal(
+      error.reason,
       'the SAML assertion was refused (bearerConfirmation): ' +
         'no bearer confirmation qualifies: #1 Method is not bearer | ' +
         '#2 Method is not bearer | #3 Method is not bearer | ' +
@@ -1642,19 +1695,27 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     ],
   ];
 
-  it.each(FIRST_FAILED)(
-    'reports the first sub-rule a candidate fails: %s',
-    async (_order, only, candidate, words) => {
-      const error = await expectSamlRejection(
-        refusalFor([only]),
-        'no-bearer-qualifies',
-        { facts: { candidates: [candidate] } },
-      );
-      expect(error.reason).toBe(
-        `the SAML assertion was refused (bearerConfirmation): no bearer confirmation qualifies: #1 ${words}`,
-      );
-    },
-  );
+  for (const [caseIndex, caseRow] of FIRST_FAILED.entries()) {
+    const [_order, only, candidate, words] = caseRow;
+    it(
+      caseTitle(
+        'reports the first sub-rule a candidate fails: %s',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const error = await expectSamlRejection(
+          refusalFor([only]),
+          'no-bearer-qualifies',
+          { facts: { candidates: [candidate] } },
+        );
+        assert.equal(
+          error.reason,
+          `the SAML assertion was refused (bearerConfirmation): no bearer confirmation qualifies: #1 ${words}`,
+        );
+      },
+    );
+  }
 
   // Replay retention is bounded by the LATEST confirmation that can still let
   // the assertion in, not by the session's (earliest) window. The reviewer's
@@ -1663,7 +1724,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   // assertion is acceptable again — and the store must still remember it.
   describe('replay retention across several qualifying confirmations', () => {
     afterEach(() => {
-      jest.restoreAllMocks();
+      mock.restoreAll();
     });
 
     const bearer = (notOnOrAfter: string, notBefore?: string) =>
@@ -1688,9 +1749,12 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
 
       const first = await shared.validate(payload, context);
       // The session still ends with the earliest window.
-      expect(first.expiresAt.getTime()).toBeLessThanOrEqual(t0 + 120_000);
+      assert.ok(
+        first.expiresAt.getTime() <= t0 + 120_000,
+        `${first.expiresAt.getTime()} <= ${t0 + 120_000}`,
+      );
 
-      jest.spyOn(Date, 'now').mockReturnValue(t0 + 200_000);
+      mock.method(Date, 'now', () => t0 + 200_000);
       await expectSamlRejection(shared.validate(payload, context), 'replayed');
     });
 
@@ -1712,7 +1776,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
 
       await shared.validate(payload, context);
 
-      jest.spyOn(Date, 'now').mockReturnValue(t0 + 200_000);
+      mock.method(Date, 'now', () => t0 + 200_000);
       await expectSamlRejection(shared.validate(payload, context), 'replayed');
     });
 
@@ -1741,7 +1805,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         ),
         context,
       );
-      expect(retained?.getTime()).toBe(
+      assert.equal(
+        retained?.getTime(),
         new Date(new Date(t0 + 300_000).toISOString()).getTime() + 5_000,
       );
     });
@@ -1767,9 +1832,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       encode(buildResponse({ issuer: 'urn:mock:idp2' })),
       { ...context, expectedIssuer: 'urn:mock:idp2' },
     );
-    expect(first.assertionId).toBe('_a1');
-    expect(second.assertionId).toBe('_a1');
-    expect(second.issuer).toBe('urn:mock:idp2');
+    assert.equal(first.assertionId, '_a1');
+    assert.equal(second.assertionId, '_a1');
+    assert.equal(second.issuer, 'urn:mock:idp2');
   });
 
   // Only an accepted assertion is recorded: a refusal must not use up the ID.
@@ -1782,7 +1847,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       { facts: { candidates: [{ reason: 'recipient-not-acs' }] } },
     );
     const result = await shared.validate(payload, context);
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   // No DTD, whatever it holds: the document is parsed by two xmldom versions,
@@ -1790,7 +1855,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   // genuinely signed, so only the DOCTYPE rule can refuse it.
   it('refuses a document carrying a DOCTYPE declaration', async () => {
     const withDoctype = `<!DOCTYPE samlp:Response>${buildResponse()}`;
-    expect(signedElementsOf(withDoctype)[0]!.localName).toBe('Response');
+    assert.equal(signedElementsOf(withDoctype)[0]!.localName, 'Response');
     await expectSamlRejection(
       validator().validate(encode(withDoctype), context),
       'doctype',
@@ -1812,7 +1877,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       validator().validate(encode(doctored), context),
       'duplicate-id',
     );
-    expect(JSON.stringify(error)).not.toContain('forged');
+    notContains(JSON.stringify(error), 'forged');
   });
 
   it('cuts a long duplicated ID at 64 code points, with …', async () => {
@@ -1826,7 +1891,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       'duplicate-id',
       { diagnostics: { id: `${long.slice(0, 64)}…` } },
     );
-    expect(error.reason).not.toContain('xxx');
+    notContains(error.reason, 'xxx');
   });
 
   // Values read after the signature are the identity provider's text, not
@@ -1840,8 +1905,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
       'declined',
     );
-    expect('statusCode' in error.facts).toBe(false);
-    expect(error.reason).toBe(
+    assert.equal('statusCode' in error.facts, false);
+    assert.equal(
+      error.reason,
       'the SAML assertion was refused (status): the identity provider declined the login',
     );
   });
@@ -1855,8 +1921,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       'declined',
       { diagnostics: { statusCode: 'urn:example:status:Custom' } },
     );
-    expect('statusCode' in error.facts).toBe(false);
-    expect(error.reason).not.toContain('Custom');
+    assert.equal('statusCode' in error.facts, false);
+    notContains(error.reason, 'Custom');
   });
 
   it('names a registered Status code as a fact, in the words, with no diagnostic', async () => {
@@ -1874,7 +1940,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         facts: { statusCode: 'urn:oasis:names:tc:SAML:2.0:status:AuthnFailed' },
       },
     );
-    expect(error.reason).toBe(
+    assert.equal(
+      error.reason,
       'the SAML assertion was refused (status): the identity provider declined the login (urn:oasis:names:tc:SAML:2.0:status:AuthnFailed)',
     );
   });
@@ -1889,18 +1956,18 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
       'untrusted-issuer',
     );
-    expect(JSON.stringify(error)).not.toContain('forged');
+    notContains(JSON.stringify(error), 'forged');
   });
 
   it('cuts an 80-character issuer at 64 code points, with …', async () => {
     const long = `urn:${'x'.repeat(76)}`;
-    expect(long).toHaveLength(80);
+    assert.equal(long.length, 80);
     const error = await expectSamlRejection(
       validator().validate(encode(buildResponse({ issuer: long })), context),
       'untrusted-issuer',
       { diagnostics: { issuer: `${long.slice(0, 64)}…` } },
     );
-    expect(error.reason).not.toContain('xxx');
+    notContains(error.reason, 'xxx');
   });
 
   it('cuts at a code-point boundary, never inside a surrogate pair', async () => {
@@ -1924,16 +1991,23 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     ['assertion-only', assertionValidator, 'root-not-response-or-assertion'],
   ];
 
-  it.each(ROOT_REFUSALS)(
-    'names the root element as a diagnostic in the %s validator refusal',
-    async (_name, make, rule) => {
-      await expectSamlRejection(
-        make().validate(encode('<LogoutRequest/>'), context),
-        rule,
-        { diagnostics: { rootElement: 'LogoutRequest' } },
-      );
-    },
-  );
+  for (const [caseIndex, caseRow] of ROOT_REFUSALS.entries()) {
+    const [_name, make, rule] = caseRow;
+    it(
+      caseTitle(
+        'names the root element as a diagnostic in the %s validator refusal',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        await expectSamlRejection(
+          make().validate(encode('<LogoutRequest/>'), context),
+          rule,
+          { diagnostics: { rootElement: 'LogoutRequest' } },
+        );
+      },
+    );
+  }
 
   it('the assertion-only validator refuses a document neither a Response nor an Assertion', async () => {
     await expectSamlRejection(
@@ -1950,17 +2024,24 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
 
   // XmlName admits at most 64 characters and never cuts a name: a longer
   // one is dropped, the error still minted.
-  it.each(ROOT_REFUSALS)(
-    'drops a root name longer than 64 characters in the %s validator refusal',
-    async (_name, make, rule) => {
-      const name = `x${'y'.repeat(99)}`;
-      const error = await expectSamlRejection(
-        make().validate(encode(`<${name}/>`), context),
-        rule,
-      );
-      expect(JSON.stringify(error)).not.toContain('yyy');
-    },
-  );
+  for (const [caseIndex, caseRow] of ROOT_REFUSALS.entries()) {
+    const [_name, make, rule] = caseRow;
+    it(
+      caseTitle(
+        'drops a root name longer than 64 characters in the %s validator refusal',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const name = `x${'y'.repeat(99)}`;
+        const error = await expectSamlRejection(
+          make().validate(encode(`<${name}/>`), context),
+          rule,
+        );
+        notContains(JSON.stringify(error), 'yyy');
+      },
+    );
+  }
 
   it('names a Destination elsewhere as a diagnostic, and drops one with a newline', async () => {
     await expectSamlRejection(
@@ -1978,7 +2059,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
       'destination-not-us',
     );
-    expect(JSON.stringify(error)).not.toContain('forged');
+    notContains(JSON.stringify(error), 'forged');
   });
 
   it('names an invalid Conditions NotBefore as a diagnostic, and drops one with a newline', async () => {
@@ -1997,7 +2078,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
       'not-before-invalid',
     );
-    expect(JSON.stringify(error)).not.toContain('forged');
+    notContains(JSON.stringify(error), 'forged');
   });
 
   it('names an invalid Conditions NotOnOrAfter as a diagnostic, and drops one with a newline', async () => {
@@ -2016,7 +2097,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
       'not-on-or-after-invalid',
     );
-    expect(JSON.stringify(error)).not.toContain('forged');
+    notContains(JSON.stringify(error), 'forged');
   });
 
   // The assertion read is the Response's direct-child Assertion, not the
@@ -2056,13 +2137,16 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
 
     // The premise: both signatures verify, and the Advice one comes first.
     const covered = signedElementsOf(response);
-    expect(covered.map((e) => e.getAttribute('ID'))).toEqual(['_inner', '_a1']);
+    assert.deepEqual(
+      covered.map((e) => e.getAttribute('ID')),
+      ['_inner', '_a1'],
+    );
 
     const result = await assertionValidator().validate(
       encode(response),
       context,
     );
-    expect(result.assertionId).toBe('_a1');
+    assert.equal(result.assertionId, '_a1');
   });
 
   it('refuses something that is not XML', async () => {
@@ -2081,7 +2165,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   // bypassing ILogger, or reach the later checks with a repaired document.
   it('refuses XML the parser would recover from, and writes nothing to the console', async () => {
     const spies = (['error', 'warn', 'log'] as const).map((level) =>
-      jest.spyOn(console, level).mockImplementation(() => undefined),
+      mock.method(console, level, () => undefined),
     );
     try {
       for (const xml of [
@@ -2096,9 +2180,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
           'not-xml',
         );
       }
-      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+      for (const spy of spies) assert.equal(spy.mock.callCount(), 0);
     } finally {
-      for (const spy of spies) spy.mockRestore();
+      for (const spy of spies) spy.mock.restore();
     }
   });
 
@@ -2106,19 +2190,17 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   // else it throws — never by design, so forced here — is the signature's
   // malformation, with nothing of what was thrown.
   it('refuses anything else the verification walk throws as signature-malformed, saying nothing of it', async () => {
-    const spy = jest
-      .spyOn(signedNode, 'resolveSignedElements')
-      .mockImplementation(() => {
-        throw new Error('SECRET-MARKER from deep inside xml-crypto');
-      });
+    const spy = mock.method(signedNode, 'resolveSignedElements', () => {
+      throw new Error('SECRET-MARKER from deep inside xml-crypto');
+    });
     try {
       const error = await expectSamlRejection(
         validator().validate(encode(buildResponse()), context),
         'signature-malformed',
       );
-      expect(JSON.stringify(error)).not.toContain('SECRET-MARKER');
+      notContains(JSON.stringify(error), 'SECRET-MARKER');
     } finally {
-      spy.mockRestore();
+      spy.mock.restore();
     }
   });
 });
